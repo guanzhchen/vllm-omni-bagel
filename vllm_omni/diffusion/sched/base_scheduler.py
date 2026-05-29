@@ -124,6 +124,14 @@ class _BaseScheduler(SchedulerInterface):
     def has_requests(self) -> bool:
         return bool(self._waiting or self._running)
 
+    @property
+    def num_waiting(self) -> int:
+        return len(self._waiting)
+
+    @property
+    def num_running(self) -> int:
+        return len(self._running)
+
     def get_request_state(self, sched_req_id: str) -> DiffusionRequestState | None:
         return self._request_states.get(sched_req_id)
 
