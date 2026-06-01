@@ -195,43 +195,4 @@ bash bagel_local_serve/mlaunch_eval100_force_twostage.sh
 
 Use `BAGEL_LOCAL_REUSE_DIR=/path/to/.../bagel_local` when only re-gating a new
 vLLM Omni topology against an already judged local baseline. Do not scale a
-candidate to 100 samples unless the 32-sample gate is both accuracy-aligned and
-faster on inference-only wall time.
-
-## Code Validation
-
-Checks that passed on the force-interleaved patch:
-
-```bash
-git diff --check
-python -m py_compile \
-  vllm_omni/diffusion/data.py \
-  vllm_omni/diffusion/diffusion_engine.py \
-  vllm_omni/diffusion/executor/multiproc_executor.py \
-  vllm_omni/diffusion/models/bagel/bagel_transformer.py \
-  vllm_omni/diffusion/models/bagel/pipeline_bagel.py \
-  vllm_omni/diffusion/request.py \
-  vllm_omni/diffusion/sched/base_scheduler.py \
-  vllm_omni/diffusion/worker/diffusion_model_runner.py \
-  vllm_omni/diffusion/worker/diffusion_worker.py \
-  vllm_omni/engine/async_omni_engine.py \
-  vllm_omni/engine/stage_pool.py \
-  vllm_omni/entrypoints/openai/serving_chat.py \
-  vllm_omni/model_executor/models/bagel/bagel.py \
-  vllm_omni/model_executor/stage_input_processors/bagel.py \
-  tests/diffusion/test_diffusion_batch_wait.py \
-  tests/engine/test_stage_pool.py \
-  tests/model_executor/test_bagel_vqa_reference_layout.py \
-  vllm_omni/utils/bagel_vqa.py
-```
-
-Unit tests were attempted with:
-
-```bash
-pytest -q tests/diffusion/test_diffusion_batch_wait.py \
-  tests/engine/test_stage_pool.py \
-  tests/model_executor/test_bagel_vqa_reference_layout.py
-```
-
-In the default shell environment, collection failed before reaching these tests
-because dependency `aenum` was missing.
+candidate to 100 samples unless the 32-sample gate is accuracy-aligned.
