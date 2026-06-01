@@ -13,9 +13,9 @@ run.
 - Fork repo: `guanzhchen/vllm-omni-bagel`
 - Fork base used for the PR branch: `b6f29ee6`
 - Force-interleaved feature commit: `a704d8f6`
-- Installed package seen during testing: `vllm-omni 0.1.dev1593+gb6f29ee61.d20260513`
-- A separate `vllm` package was not installed in the default shell used for
-  validation.
+- Dev branch package seen during the 2026-05-31 fair gates:
+  `vllm-omni 0.1.dev1594+ga704d8f64.d20260531`
+- vLLM package seen during the same gates: `vllm 0.20.0`
 
 ## What Changed
 
@@ -54,85 +54,76 @@ places that matter for the force-interleaved judge:
   the local reference path.
 - Output formatting had to match the local judge payload.
 
-The final aligned config kept the speed-oriented vLLM Omni two-stage serving
-path, but disabled the text-batching choices that changed the judged outputs.
+The final aligned configs kept the speed-oriented vLLM Omni two-stage serving
+path. The conservative local-equivalent path keeps Stage 1 text per request;
+the fastest accuracy-aligned gate uses batched Stage 1 text only when decoded
+think text is re-encoded before image generation.
 
-## Accuracy Alignment Gate
+## Current MMVet Accuracy and Inference Time
 
-The accuracy gate was a judged 32-sample MMVet probe with the same 20-step force
-configuration used for the later speed run.
+The headline accuracy comparison should be read as the current MMVet judged
+performance, with the measured inference-only wall time kept alongside it. The
+older 2026-05-28 speed notes are historical because the local timing was not
+recorded in the same artifact as the vLLM Omni timing.
 
-Artifact:
-
-```text
-bagel_local_serve/outputs/eval100_eval32_steps20_cfgprefix_nobatchtext_reusefix_20260528_154426
-```
-
-Result:
-
-| System | Score | Valid | Inference Time |
-|---|---:|---:|---:|
-| vLLM Omni two-stage force, 20 steps | 71.88 | 32/32 | 504.419s |
-| BAGEL local force-interleaved | 59.375 | 32/32 | 1071.252s |
-
-The local run reused this reference output directory:
+Reference local artifact:
 
 ```text
-bagel_local_serve/outputs/eval100_eval32_batchtext_noreencode_20260528_103927/bagel_local
+bagel_local_serve/outputs/eval100_omni_rep4batch4_balanced_fair20_gate32_20260531_184043/bagel_local
 ```
 
-The comparison markdown is:
+Reference local result:
+
+| System | Score | Valid | Inference Time | Throughput |
+|---|---:|---:|---:|---:|
+| BAGEL local force-interleaved, 4-rank torchrun | 69.062 | 32/32 | 302.109s | 0.106 samples/s |
+
+vLLM Omni gates tried against that same local baseline:
+
+| Candidate | Key knobs | Score | Inference Time | Speed ratio vLLM/local | Status |
+|---|---|---:|---:|---:|---|
+| Two-stage rep4 batch4 | `FORCE_STAGE1_BATCH_TEXT=0`, `max_num_seqs=4`, `batch_balanced` | 64.38 | 323.319s | 1.07 | Accuracy gap and slower |
+| Two-stage rep4 batch8 | `max_num_seqs=8`, `request_batch_wait_ms=60000`, dataset order | 73.12 | 353.585s | 1.17 | Accuracy aligned, slower |
+| Single-stage rep4 | `OMNI_BACKEND=vllm_force`, `bagel_force_single_stage_rep4.yaml` | 19.06 | 310.45s | 1.028 | Accuracy collapse |
+| Two-stage rep4 batch4 batched text | `FORCE_STAGE1_BATCH_TEXT=1` | 62.5 | 306.752s | 1.015 | Accuracy gap and not faster |
+| Two-stage rep4 batch8 batched text + reencode | `FORCE_STAGE1_BATCH_TEXT=1`, `FORCE_STAGE1_REENCODE_TEXT=1` | 71.88 | 325.874s | 1.079 | Accuracy aligned, slower |
+
+No 2026-05-31 candidate met the `>3x` target. The fastest accuracy-aligned run
+was the two-stage rep4 batch8 batched-text + reencode gate, but it was still
+slower than the BAGEL local baseline. The closest speed runs were
+approximately equal to local and had large accuracy drops.
+
+The current bottleneck is inside Stage 1, not the HTTP driver. On the fastest
+accuracy-aligned gate, each Stage 1 replica spent about 77-85s on batched think,
+149-168s on the image batch, and 15-18s on batched answer. Since the
+BAGEL local 32-sample baseline is 302.109s, a `>3x` vLLM result would need
+to finish below about 100.7s; the Stage 1 image batch alone already exceeds that
+limit. Hitting `>3x` therefore requires a materially different Stage 1 image
+kernel/topology, not just higher request concurrency.
+
+Representative artifacts:
 
 ```text
-bagel_local_serve/outputs/eval100_eval32_steps20_cfgprefix_nobatchtext_reusefix_20260528_154426/comparison/comparison.md
+bagel_local_serve/outputs/eval100_omni_rep4batch4_balanced_fair20_gate32_20260531_184043
+bagel_local_serve/outputs/eval100_omni_rep4batch8_wait60_fair20_gate32_20260531_192132
+bagel_local_serve/outputs/eval100_omni_single_rep4_fair20_gate32_20260531_194012
+bagel_local_serve/outputs/eval100_omni_rep4batch4_batchtext_fair20_gate32_20260531_195246
+bagel_local_serve/outputs/eval100_omni_rep4batch8_batchtext_reencode_fair20_gate32_20260531_201140
 ```
 
-## Speed Comparison
+## Current Eval Config
 
-After the judged 32-sample gate, speed was measured on 100 samples with judge
-disabled.
-
-Artifact:
-
-```text
-bagel_local_serve/outputs/eval100_speed100_steps20_cfgprefix_nobatchtext_20260528_155916
-```
-
-Result:
-
-| System | Samples | Valid | Generated Images | Inference Time | Throughput |
-|---|---:|---:|---:|---:|---:|
-| vLLM Omni two-stage force, 20 steps | 100 | 100 | 100 | 1489.254s | 0.067 samples/s |
-| BAGEL local force-interleaved | 100 | 100 | - | 3242.676s | 0.03084 samples/s |
-
-Inference-only speedup:
-
-```text
-3242.676 / 1489.254 = 2.177x
-```
-
-Including vLLM engine initialization, total vLLM time was `1693.357s`, still
-`1.915x` versus local inference-only time.
-
-The comparison markdown is:
-
-```text
-bagel_local_serve/outputs/eval100_speed100_steps20_cfgprefix_nobatchtext_20260528_155916/comparison/comparison.md
-```
-
-## Final Eval Config
-
-The final accuracy-aligned speed run used:
+The fastest accuracy-aligned two-stage gate used:
 
 ```bash
-N_SAMPLES=100
-CONCURRENCY=64
-SKIP_JUDGE=1
-MLAUNCH_GPUS=2
+N_SAMPLES=32
+CONCURRENCY=96
+MLAUNCH_GPUS=4
 OMNI_BACKEND=vllm_force_twostage
-FORCE_TWOSTAGE_DEPLOY_CFG_OVERRIDE=/mnt/moonfs/chenguanzheng-m4/Projects/ThinkMorph-Pro/vllm_omni_serving/bagel_force_twostage_dualgpu_stage1rep2.yaml
-FORCE_TWOSTAGE_DIFFUSION_BATCH_SIZE=4
-FORCE_NUM_TIMESTEPS=20
+FORCE_TWOSTAGE_DEPLOY_CFG=/mnt/moonfs/chenguanzheng-m4/Projects/ThinkMorph-Pro/vllm_omni_serving/bagel_force_twostage_stage1rep4_batch8.yaml
+FORCE_TWOSTAGE_DIFFUSION_BATCH_SIZE=8
+FORCE_TWOSTAGE_SCHEDULE_ORDER=dataset
+FORCE_TWOSTAGE_SCHEDULE_REPLICAS=4
 ```
 
 Accuracy-sensitive settings:
@@ -148,73 +139,63 @@ BAGEL_IMG2IMG_NONCAUSAL_RECOMPUTE=1
 FORCE_SEED=0
 FORCE_SEED_BY_INDEX=1
 FORCE_DO_SAMPLE=1
-FORCE_STAGE1_BATCH_TEXT=0
-FORCE_STAGE1_REENCODE_TEXT=0
+FORCE_STAGE1_BATCH_TEXT=1
+FORCE_STAGE1_REENCODE_TEXT=1
 ```
+
+For a more conservative local-equivalent diagnostic, set
+`FORCE_STAGE1_BATCH_TEXT=0` and `FORCE_STAGE1_REENCODE_TEXT=0`. That path keeps
+think/answer generation per request and matched accuracy in the batch8 gate, but
+was slower at 353.585s for the same 32 samples.
 
 The key point is `FORCE_SEED_BY_INDEX=1`. vLLM Omni is async, so request order
 and completion order can differ from the local reference. Seeding by MMVet item
 index makes each item deterministic independent of scheduling order.
 
-Stage 1 CUDA graph was not enabled in the measured config because
-`enforce_eager: true` was kept in the Stage 1 deployment config. The measured
-speedup came from two-stage KV reuse, Stage 1 replica scaling, request
-concurrency, image batching, and the 20-step diffusion config.
+Stage 0 uses vLLM CUDA graph capture for the AR understanding prefill. Stage 1
+is intentionally eager (`enforce_eager: true`): compiling the BAGEL DiT path on
+2026-05-31 corrupted outputs and was slower (`~72.7 -> 51.9` MMVet, `23.3` vs
+`16.6` s/sample in the compile gate). The current code keeps Stage 1 eager.
 
 ## How to Re-run
 
-The historical launch scripts generated for the two final runs are:
-
-```text
-bagel_local_serve/logs/eval100_eval32_steps20_cfgprefix_nobatchtext_reusefix_20260528_154426_remote.sh
-bagel_local_serve/logs/eval100_speed100_steps20_cfgprefix_nobatchtext_20260528_155916_remote.sh
-```
-
-The common runner is:
+The common two-stage runner is:
 
 ```text
 bagel_local_serve/mlaunch_eval100_force_twostage.sh
 ```
 
-A typical 32-sample judged alignment run uses:
+A current 32-sample judged gate uses:
 
 ```bash
 N_SAMPLES=32 \
-SKIP_JUDGE=0 \
-CONCURRENCY=64 \
+MLAUNCH_GPUS=4 \
+CONCURRENCY=96 \
+JUDGE=gpt-5.4 \
+JUDGE_NPROC=12 \
+JUDGE_REASONING_EFFORT=medium \
 OMNI_BACKEND=vllm_force_twostage \
-FORCE_NUM_TIMESTEPS=20 \
-FORCE_TWOSTAGE_DIFFUSION_BATCH_SIZE=4 \
+FORCE_TWOSTAGE_DEPLOY_CFG=/mnt/moonfs/chenguanzheng-m4/Projects/ThinkMorph-Pro/vllm_omni_serving/bagel_force_twostage_stage1rep4_batch8.yaml \
+FORCE_TWOSTAGE_DIFFUSION_BATCH_SIZE=8 \
+FORCE_TWOSTAGE_SCHEDULE_ORDER=dataset \
+FORCE_TWOSTAGE_SCHEDULE_REPLICAS=4 \
 BAGEL_CFG_TEXT_FROM_MAIN_PREFIX=1 \
-FORCE_STAGE1_BATCH_TEXT=0 \
-FORCE_STAGE1_REENCODE_TEXT=0 \
+FORCE_STAGE1_BATCH_TEXT=1 \
+FORCE_STAGE1_REENCODE_TEXT=1 \
 FORCE_SEED=0 \
 FORCE_SEED_BY_INDEX=1 \
+FORCE_DO_SAMPLE=1 \
 BAGEL_FORCE_IMG2IMG_VIT=1 \
 BAGEL_IMG2IMG_VIT_SEPARATOR=0 \
 BAGEL_IMG2IMG_NONCAUSAL_RECOMPUTE=1 \
+BAGEL_LOCAL_MODEL=bagel_local_force_interleaved \
 bash bagel_local_serve/mlaunch_eval100_force_twostage.sh
 ```
 
-A typical 100-sample speed-only run changes only the sample count and judge flag:
-
-```bash
-N_SAMPLES=100 \
-SKIP_JUDGE=1 \
-CONCURRENCY=64 \
-OMNI_BACKEND=vllm_force_twostage \
-FORCE_NUM_TIMESTEPS=20 \
-FORCE_TWOSTAGE_DIFFUSION_BATCH_SIZE=4 \
-BAGEL_CFG_TEXT_FROM_MAIN_PREFIX=1 \
-FORCE_STAGE1_BATCH_TEXT=0 \
-FORCE_STAGE1_REENCODE_TEXT=0 \
-FORCE_SEED=0 \
-FORCE_SEED_BY_INDEX=1 \
-BAGEL_FORCE_IMG2IMG_VIT=1 \
-BAGEL_IMG2IMG_VIT_SEPARATOR=0 \
-BAGEL_IMG2IMG_NONCAUSAL_RECOMPUTE=1 \
-bash bagel_local_serve/mlaunch_eval100_force_twostage.sh
-```
+Use `BAGEL_LOCAL_REUSE_DIR=/path/to/.../bagel_local` when only re-gating a new
+vLLM Omni topology against an already judged local baseline. Do not scale a
+candidate to 100 samples unless the 32-sample gate is both accuracy-aligned and
+faster on inference-only wall time.
 
 ## Code Validation
 
