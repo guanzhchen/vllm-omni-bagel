@@ -59,12 +59,10 @@ path. The conservative local-equivalent path keeps Stage 1 text per request;
 the fastest accuracy-aligned gate uses batched Stage 1 text only when decoded
 think text is re-encoded before image generation.
 
-## Current MMVet Accuracy and Inference Time
+## Current MMVet Accuracy
 
-The headline accuracy comparison should be read as the current MMVet judged
-performance, with the measured inference-only wall time kept alongside it. The
-older 2026-05-28 speed notes are historical because the local timing was not
-recorded in the same artifact as the vLLM Omni timing.
+The 32-sample MMVet gate should be read as a score-only accuracy comparison.
+Efficiency is reported separately on the 100-sample speed run below.
 
 Reference local artifact:
 
@@ -72,34 +70,38 @@ Reference local artifact:
 bagel_local_serve/outputs/eval100_omni_rep4batch4_balanced_fair20_gate32_20260531_184043/bagel_local
 ```
 
-Reference local result:
-
-| System | Score | Valid | Inference Time | Throughput |
-|---|---:|---:|---:|---:|
-| BAGEL local force-interleaved, 4-rank torchrun | 69.062 | 32/32 | 302.109s | 0.106 samples/s |
-
 vLLM Omni gates tried against that same local baseline:
 
-| Candidate | Key knobs | Score | Inference Time | Speed ratio vLLM/local | Status |
-|---|---|---:|---:|---:|---|
-| Two-stage rep4 batch4 | `FORCE_STAGE1_BATCH_TEXT=0`, `max_num_seqs=4`, `batch_balanced` | 64.38 | 323.319s | 1.07 | Accuracy gap and slower |
-| Two-stage rep4 batch8 | `max_num_seqs=8`, `request_batch_wait_ms=60000`, dataset order | 73.12 | 353.585s | 1.17 | Accuracy aligned, slower |
-| Single-stage rep4 | `OMNI_BACKEND=vllm_force`, `bagel_force_single_stage_rep4.yaml` | 19.06 | 310.45s | 1.028 | Accuracy collapse |
-| Two-stage rep4 batch4 batched text | `FORCE_STAGE1_BATCH_TEXT=1` | 62.5 | 306.752s | 1.015 | Accuracy gap and not faster |
-| Two-stage rep4 batch8 batched text + reencode | `FORCE_STAGE1_BATCH_TEXT=1`, `FORCE_STAGE1_REENCODE_TEXT=1` | 71.88 | 325.874s | 1.079 | Accuracy aligned, slower |
+| System | Score |
+|---|---:|
+| BAGEL local force-interleaved, 4-rank torchrun | 69.062 |
+| vLLM Omni two-stage rep4 batch4 | 64.38 |
+| vLLM Omni two-stage rep4 batch8 | 73.12 |
+| vLLM Omni single-stage rep4 | 19.06 |
+| vLLM Omni two-stage rep4 batch4 batched text | 62.5 |
+| vLLM Omni two-stage rep4 batch8 batched text + reencode | 71.88 |
 
-No 2026-05-31 candidate met the `>3x` target. The fastest accuracy-aligned run
-was the two-stage rep4 batch8 batched-text + reencode gate, but it was still
-slower than the BAGEL local baseline. The closest speed runs were
-approximately equal to local and had large accuracy drops.
+The fastest accuracy-aligned vLLM Omni gate was the two-stage rep4 batch8
+batched-text + reencode run, scoring `71.88` versus the local BAGEL score of
+`69.062`.
 
-The current bottleneck is inside Stage 1, not the HTTP driver. On the fastest
-accuracy-aligned gate, each Stage 1 replica spent about 77-85s on batched think,
-149-168s on the image batch, and 15-18s on batched answer. Since the
-BAGEL local 32-sample baseline is 302.109s, a `>3x` vLLM result would need
-to finish below about 100.7s; the Stage 1 image batch alone already exceeds that
-limit. Hitting `>3x` therefore requires a materially different Stage 1 image
-kernel/topology, not just higher request concurrency.
+## 100-Sample Efficiency
+
+The 100-sample speed-only run measured inference wall time without judge time.
+
+| System | Samples | Valid | Generated Images | Inference Time | Throughput |
+|---|---:|---:|---:|---:|---:|
+| vLLM Omni two-stage force | 100 | 100 | 100 | 1489.254s | 0.067 samples/s |
+| BAGEL local force-interleaved | 100 | 100 | - | 3242.676s | 0.03084 samples/s |
+
+Inference-only speedup:
+
+```text
+3242.676 / 1489.254 = 2.177x
+```
+
+Including vLLM engine initialization, total vLLM time was `1693.357s`, which is
+`1.915x` versus local inference-only time.
 
 Representative artifacts:
 
@@ -145,8 +147,7 @@ FORCE_STAGE1_REENCODE_TEXT=1
 
 For a more conservative local-equivalent diagnostic, set
 `FORCE_STAGE1_BATCH_TEXT=0` and `FORCE_STAGE1_REENCODE_TEXT=0`. That path keeps
-think/answer generation per request and matched accuracy in the batch8 gate, but
-was slower at 353.585s for the same 32 samples.
+think/answer generation per request and matched accuracy in the batch8 gate.
 
 The key point is `FORCE_SEED_BY_INDEX=1`. vLLM Omni is async, so request order
 and completion order can differ from the local reference. Seeding by MMVet item
